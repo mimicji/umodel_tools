@@ -371,31 +371,45 @@ class AssetImporter:
 
         asset_psk_path_noext = os.path.join(umodel_export_dir, asset_path_local_noext)
 
-        if os.path.isfile(pskx_path := asset_psk_path_noext + '.pskx'):
-            utils.verbose_print(f"Importing \"{pskx_path}\"")
+        # Find the actual .pskx/.psk file; try exact name first, then _LOD0 suffix as
+        # fallback for FModel multi-LOD exports (e.g. SM_Foo_LOD0.pskx).
+        found_path: str | None = None
+        animated: bool = False
+        lod0_fallback: bool = False
 
-            with contextlib.redirect_stdout(io.StringIO()):
-                if not pskimport(filepath=pskx_path,
-                                 context=context,
-                                 bImportbone=False):
-                    raise RuntimeError(f"Error: Failed importing asset {asset_psk_path_noext + '.pskx'} "
-                                       "due to unknown reason.")
-
-            animated = False
-        elif os.path.isfile(psk_path := asset_psk_path_noext + '.psk'):
-            utils.verbose_print(f"Importing \"{psk_path}\"")
-
-            with contextlib.redirect_stdout(io.StringIO()):
-                if not pskimport(filepath=psk_path,
-                                 context=context,
-                                 bImportbone=False):
-                    raise RuntimeError(f"Error: Failed importing asset {asset_psk_path_noext + '.psk'} "
-                                       "due to unknown reason.")
+        if os.path.isfile(asset_psk_path_noext + '.pskx'):
+            found_path = asset_psk_path_noext + '.pskx'
+        elif os.path.isfile(asset_psk_path_noext + '.psk'):
+            found_path = asset_psk_path_noext + '.psk'
             animated = True
+        elif os.path.isfile(asset_psk_path_noext + '_LOD0.pskx'):
+            found_path = asset_psk_path_noext + '_LOD0.pskx'
+            lod0_fallback = True
+        elif os.path.isfile(asset_psk_path_noext + '_LOD0.psk'):
+            found_path = asset_psk_path_noext + '_LOD0.psk'
+            animated = True
+            lod0_fallback = True
 
-        else:
+        if found_path is None:
             raise FileNotFoundError(f"Error: Failed importing asset: {asset_psk_path_noext} was not found "
-                                    "(.psk/.pskx).")
+                                    "(.psk/.pskx, also tried _LOD0 suffix).")
+
+        if lod0_fallback:
+            utils.verbose_print(f"Info: Exact file not found, using LOD0 fallback: \"{found_path}\"")
+
+        utils.verbose_print(f"Importing \"{found_path}\"")
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            if not pskimport(filepath=found_path,
+                             context=context,
+                             bImportbone=False):
+                raise RuntimeError(f"Error: Failed importing asset {found_path} due to unknown reason.")
+
+        # props.txt always uses the base name without _LOD0
+        asset_psk_path_noext_resolved = asset_psk_path_noext
+
+        # keep psk_path consistent for the animated materials fallback logic below
+        psk_path = found_path
 
         obj = context.object
 
@@ -409,11 +423,11 @@ class AssetImporter:
         # - read material descriptor file and identify associated materials
         try:
             # pylint: disable=unpacking-non-sequence
-            _, mat_descriptors_paths = props_txt_parser.parse_props_txt(asset_psk_path_noext + '.props.txt',
+            _, mat_descriptors_paths = props_txt_parser.parse_props_txt(asset_psk_path_noext_resolved + '.props.txt',
                                                                         mode='MESH')
         except OSError:
-            self._warn_print(f"Warning: Loading material descriptor {asset_psk_path_noext + '.props.txt'} failed. "
-                             "Materials will not be avaialble for the imported object.")
+            self._warn_print(f"Warning: Loading material descriptor {asset_psk_path_noext_resolved + '.props.txt'} "
+                             "failed. Materials will not be avaialble for the imported object.")
         else:
             # attempt to obtain materials manually if descriptor is not available
             mat_desc_order_map = {mat.name: None for mat in obj.data.materials}
